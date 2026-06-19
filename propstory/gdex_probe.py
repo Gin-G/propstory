@@ -1,174 +1,141 @@
-"""GDEX access probe — trial-and-error harness meant to run in GitHub Actions.
+"""GDEX access probe v2 — drill into the real Zarr stores and open them.
 
-This sandbox cannot reach the GDEX hosts (network policy denies them), but CI
-runners have open egress. This script attempts every GDEX access path we know of
-for CONUS404 and ERA5, prints a clear PASS/FAIL report, and (when something
-works) extracts a single point to prove end-to-end access. Use the CI logs to
-iterate on the exact store paths.
+Findings from v1 (run in CI):
+  * OSDF/PelicanFS listing works against GDEX.
+  * ERA5  d633000 exposes zarr dirs: e5.oper.an.sfc.zarr (surface analysis), etc.
+  * CONUS404 d559000 is per-water-year (wy1980..wy2021) + a kerchunk/ dir.
+  * xr.open_dataset("osdf://...", engine="zarr") -> ValueError: list.remove(x).
 
-GDEX is the *only* source used here. No GCS/AWS/STAC fallbacks.
+v2 deep-lists the candidate stores and tries to OPEN them via PelicanMap, then
+extracts the property point to prove end-to-end access. GDEX-only.
 """
 
 from __future__ import annotations
 
-import json
-import sys
 import traceback
 
-# Property under study (approx; exact parcel can be passed later).
 LAT, LON = 40.06, -106.39
+NS = "/ncar/gdex"
+FED = "https://osdf-data.gdex.ucar.edu"
 
-# RDA -> GDEX dataset ids
-DATASETS = {
-    "CONUS404": "d559000",   # NCAR/USGS 4 km hydroclimate reanalysis (ds559.0)
-    "ERA5": "d633000",       # ECMWF ERA5 on GDEX (ds633.0)
-}
+ERA5_SFC = f"{NS}/d633000/e5.oper.an.sfc.zarr"
+CONUS404 = f"{NS}/d559000"
 
-GDEX_WEB = "https://gdex.ucar.edu"
-OSDF_HTTPS = "https://osdf-data.gdex.ucar.edu"      # OSDF origin (https)
-OSDF_NS = "/ncar/gdex"                              # pelican namespace base
-TDS = "https://tds.gdex.ucar.edu/thredds"          # THREDDS data server
+
+def fs():
+    from pelicanfs.core import PelicanFileSystem
+    return PelicanFileSystem(FED)
 
 
 def line(c="-"):
     print(c * 72)
 
 
-def reach():
-    import requests
-    print("REACHABILITY"); line()
-    for url in (GDEX_WEB, OSDF_HTTPS, f"{TDS}/catalog.xml",
-                "https://thredds.rda.ucar.edu/thredds/catalog.xml"):
-        try:
-            r = requests.get(url, timeout=30)
-            print(f"  {r.status_code:>3}  {url}  ({len(r.content)} bytes)")
-        except Exception as e:
-            print(f"  ERR  {url}  -> {type(e).__name__}: {e}")
-    print()
-
-
-def thredds_catalog():
-    """Walk the THREDDS catalog looking for the target datasets."""
-    import re
-    import requests
-    print("THREDDS CATALOG DISCOVERY"); line()
-    candidates = [
-        f"{TDS}/catalog.xml",
-        f"{TDS}/catalog/catalog.xml",
-    ]
-    for ds, did in DATASETS.items():
-        candidates += [
-            f"{TDS}/catalog/files/g/{did}/catalog.xml",
-            f"{TDS}/catalog/aggregations/g/{did}/catalog.xml",
-            f"{TDS}/catalog/{did}/catalog.xml",
-        ]
-    for url in candidates:
-        try:
-            r = requests.get(url, timeout=40)
-            if r.status_code != 200:
-                print(f"  {r.status_code}  {url}")
-                continue
-            refs = re.findall(r'(?:catalogRef|dataset)[^>]*?(?:xlink:href|urlPath|ID)="([^"]+)"', r.text)
-            print(f"  200  {url}")
-            for ref in refs[:25]:
-                print(f"        - {ref}")
-            if len(refs) > 25:
-                print(f"        ... (+{len(refs)-25} more)")
-        except Exception as e:
-            print(f"  ERR  {url}  -> {type(e).__name__}: {e}")
-    print()
-
-
-def gdex_web_links():
-    """Scrape the dataset web pages for any zarr/osdf/opendap hints."""
-    import re
-    import requests
-    print("GDEX DATASET PAGE HINTS"); line()
-    for ds, did in DATASETS.items():
-        url = f"{GDEX_WEB}/datasets/{did}/"
-        try:
-            r = requests.get(url, timeout=40)
-            hits = sorted(set(re.findall(
-                r'(osdf://[^\s"\'<>]+|https?://[^\s"\'<>]*(?:zarr|dodsC|osdf)[^\s"\'<>]*)', r.text)))
-            print(f"  {ds} {did}: {r.status_code}, {len(hits)} hint(s)")
-            for h in hits[:15]:
-                print(f"        {h}")
-        except Exception as e:
-            print(f"  {ds} {did}: ERR {type(e).__name__}: {e}")
-    print()
-
-
-def osdf_listing():
-    """Try to list the OSDF namespace for each dataset via PelicanFS."""
-    print("OSDF / PELICANFS LISTING"); line()
+def ls(f, path, n=40):
     try:
-        from pelicanfs.core import PelicanFileSystem
+        items = f.ls(path, detail=False)
+        print(f"  {path}  ({len(items)} entries)")
+        for it in items[:n]:
+            print(f"      {it}")
+        if len(items) > n:
+            print(f"      ... (+{len(items)-n})")
+        return items
     except Exception as e:
-        print(f"  pelicanfs import failed: {e}"); print(); return
-    for fed in ("osdf-data.gdex.ucar.edu", "osg-htc.org"):
-        print(f"  federation discovery via https://{fed}")
-        try:
-            fs = PelicanFileSystem(f"https://{fed}")
-            for ds, did in DATASETS.items():
-                path = f"{OSDF_NS}/{did}"
-                try:
-                    items = fs.ls(path, detail=False)
-                    print(f"    {ds} {path}: {len(items)} entries")
-                    for it in items[:15]:
-                        print(f"        {it}")
-                except Exception as e:
-                    print(f"    {ds} {path}: ERR {type(e).__name__}: {str(e)[:120]}")
-        except Exception as e:
-            print(f"    federation {fed} failed: {type(e).__name__}: {str(e)[:120]}")
+        print(f"  {path}  LS-ERR {type(e).__name__}: {str(e)[:140]}")
+        return []
+
+
+def discover():
+    print("DEEP LISTING"); line()
+    f = fs()
+    # ERA5 surface analysis zarr: is it one store (zarr.json/.zmetadata) or many?
+    era5_keys = ls(f, ERA5_SFC, n=60)
+    # CONUS404 structure
+    ls(f, f"{CONUS404}/kerchunk", n=40)
+    ls(f, f"{CONUS404}/catalogs", n=40)
+    ls(f, f"{CONUS404}/wy2021", n=40)
+    ls(f, f"{NS}/d633000/catalogs", n=40)
     print()
+    return era5_keys
 
 
-def try_open(store: str, label: str):
-    """Attempt to open a zarr store and extract the property point."""
-    import numpy as np
+def open_strategies(path, label):
+    """Try several ways to open a zarr store from OSDF; report what works."""
     import xarray as xr
-    print(f"  OPEN [{label}] {store}")
-    try:
-        ds = xr.open_dataset(store, engine="zarr", chunks={})
-        svars = [v for v in ds.data_vars]
+    from pelicanfs.core import PelicanFileSystem, PelicanMap
+    print(f"OPEN [{label}] {path}"); line()
+    f = PelicanFileSystem(FED)
+
+    def report(ds):
+        dv = list(ds.data_vars)
         print(f"    OK dims={dict(ds.sizes)}")
-        print(f"    vars({len(svars)}): {svars[:12]}{' ...' if len(svars) > 12 else ''}")
-        # try a nearest-point extraction on whatever coords exist
+        print(f"    vars({len(dv)}): {dv[:16]}")
         latn = next((c for c in ("latitude", "lat", "XLAT") if c in ds), None)
         lonn = next((c for c in ("longitude", "lon", "XLONG") if c in ds), None)
-        print(f"    coords: lat={latn} lon={lonn}")
-        return True
+        print(f"    coords lat={latn} lon={lonn} | coords={list(ds.coords)[:10]}")
+        return latn, lonn
+
+    # Strategy A: PelicanMap + open_zarr (consolidated then not)
+    for consolidated in (True, False):
+        try:
+            m = PelicanMap(path, pelfs=f)
+            ds = xr.open_zarr(m, consolidated=consolidated)
+            print(f"    [A consolidated={consolidated}] success")
+            report(ds)
+            return ds
+        except Exception as e:
+            print(f"    [A consolidated={consolidated}] {type(e).__name__}: {str(e)[:140]}")
+
+    # Strategy B: get_mapper
+    try:
+        m = f.get_mapper(path)
+        ds = xr.open_zarr(m, consolidated=False)
+        print("    [B get_mapper] success"); report(ds); return ds
     except Exception as e:
-        print(f"    FAIL {type(e).__name__}: {str(e)[:160]}")
-        return False
+        print(f"    [B get_mapper] {type(e).__name__}: {str(e)[:140]}")
+
+    print()
+    return None
 
 
-def open_attempts():
-    print("DIRECT OPEN ATTEMPTS"); line()
-    for ds, did in DATASETS.items():
-        # A few plausible leaf names; CI logs tell us which (if any) resolve.
-        leaves = ["", "conus404_hourly.zarr", "conus404.zarr", "era5.zarr",
-                  f"{did}.zarr"]
-        for leaf in leaves:
-            store = f"osdf://{OSDF_NS}/{did}/{leaf}".rstrip("/")
-            try_open(store, f"{ds} osdf")
+def extract(ds):
+    if ds is None:
+        return
+    print("POINT EXTRACTION"); line()
+    try:
+        latn = "latitude" if "latitude" in ds else ("lat" if "lat" in ds else None)
+        lonn = "longitude" if "longitude" in ds else ("lon" if "lon" in ds else None)
+        var = next((v for v in ("VAR_2T", "2t", "t2m", "T2", "SNOW_ACC_NC",
+                                "SNOWH", "VAR_10U", "10u") if v in ds.data_vars),
+                   list(ds.data_vars)[0])
+        lon = LON % 360 if float(ds[lonn].max()) > 180 else LON
+        pt = ds[var].sel({latn: LAT, lonn: lon}, method="nearest")
+        print(f"    var={var} cell=({float(pt[latn]):.3f},{float(pt[lonn]):.3f}) "
+              f"time={ds.sizes.get('time')}")
+        sample = pt.isel(time=slice(0, 3)).values if "time" in pt.dims else pt.values
+        print(f"    sample values: {sample}")
+    except Exception as e:
+        print(f"    extract ERR {type(e).__name__}: {str(e)[:160]}")
     print()
 
 
 def main():
-    print("=" * 72)
-    print("GDEX ACCESS PROBE")
-    print(f"target point: {LAT}, {LON}")
-    print("=" * 72)
-    for step in (reach, thredds_catalog, gdex_web_links, osdf_listing, open_attempts):
-        try:
-            step()
-        except Exception:
-            print(f"step {step.__name__} crashed:")
-            traceback.print_exc()
-            print()
-    print("PROBE COMPLETE")
+    print("=" * 72); print("GDEX PROBE v2"); print("=" * 72)
+    try:
+        era5_keys = discover()
+    except Exception:
+        traceback.print_exc(); era5_keys = []
+
+    # If ERA5 sfc is a single store it will contain zarr.json/.zmetadata/.zgroup.
+    markers = {"zarr.json", ".zmetadata", ".zgroup"}
+    era5_is_store = any(k.rstrip("/").split("/")[-1] in markers for k in era5_keys)
+    print(f"ERA5 sfc looks like a single zarr store: {era5_is_store}\n")
+
+    ds = open_strategies(ERA5_SFC, "ERA5 surface analysis")
+    extract(ds)
+
+    print("PROBE v2 COMPLETE")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
