@@ -1,140 +1,128 @@
-"""GDEX access probe v2 — drill into the real Zarr stores and open them.
+"""GDEX access probe v3 — open via kerchunk virtual-zarr references (HTTPS).
 
-Findings from v1 (run in CI):
-  * OSDF/PelicanFS listing works against GDEX.
-  * ERA5  d633000 exposes zarr dirs: e5.oper.an.sfc.zarr (surface analysis), etc.
-  * CONUS404 d559000 is per-water-year (wy1980..wy2021) + a kerchunk/ dir.
-  * xr.open_dataset("osdf://...", engine="zarr") -> ValueError: list.remove(x).
+v2 findings:
+  * CONUS404 d559000 has kerchunk refs: kerchunk/wy<YYYY>.{2d,3d}-{https,osdf}.json
+    - 2d = surface fields (snow, wind, temp, precip)  <-- what we need
+    - the -https variant points chunk reads at plain HTTPS, avoiding the
+      pelicanfs+zarr 'list.remove' bug.
+  * ERA5 d633000/e5.oper.an.sfc.zarr is a directory of sub-stores, not one group.
 
-v2 deep-lists the candidate stores and tries to OPEN them via PelicanMap, then
-extracts the property point to prove end-to-end access. GDEX-only.
+v3 opens the CONUS404 2d kerchunk reference over HTTPS and extracts the property
+point, and inspects ERA5's substore layout + kerchunk. GDEX-only.
 """
 
 from __future__ import annotations
 
+import json
 import traceback
 
+import requests
+
 LAT, LON = 40.06, -106.39
+HTTPS = "https://osdf-data.gdex.ucar.edu"          # OSDF origin also serves plain HTTPS
 NS = "/ncar/gdex"
-FED = "https://osdf-data.gdex.ucar.edu"
-
-ERA5_SFC = f"{NS}/d633000/e5.oper.an.sfc.zarr"
-CONUS404 = f"{NS}/d559000"
-
-
-def fs():
-    from pelicanfs.core import PelicanFileSystem
-    return PelicanFileSystem(FED)
 
 
 def line(c="-"):
     print(c * 72)
 
 
-def ls(f, path, n=40):
-    try:
-        items = f.ls(path, detail=False)
-        print(f"  {path}  ({len(items)} entries)")
-        for it in items[:n]:
-            print(f"      {it}")
-        if len(items) > n:
-            print(f"      ... (+{len(items)-n})")
-        return items
-    except Exception as e:
-        print(f"  {path}  LS-ERR {type(e).__name__}: {str(e)[:140]}")
-        return []
+def http_json(url):
+    r = requests.get(url, timeout=90)
+    r.raise_for_status()
+    return r.json()
 
 
-def discover():
-    print("DEEP LISTING"); line()
-    f = fs()
-    # ERA5 surface analysis zarr: is it one store (zarr.json/.zmetadata) or many?
-    era5_keys = ls(f, ERA5_SFC, n=60)
-    # CONUS404 structure
-    ls(f, f"{CONUS404}/kerchunk", n=40)
-    ls(f, f"{CONUS404}/catalogs", n=40)
-    ls(f, f"{CONUS404}/wy2021", n=40)
-    ls(f, f"{NS}/d633000/catalogs", n=40)
-    print()
-    return era5_keys
-
-
-def open_strategies(path, label):
-    """Try several ways to open a zarr store from OSDF; report what works."""
+def open_kerchunk(ref_url, label):
+    """Open a kerchunk reference (HTTPS remote) as an xarray dataset."""
+    import fsspec
     import xarray as xr
-    from pelicanfs.core import PelicanFileSystem, PelicanMap
-    print(f"OPEN [{label}] {path}"); line()
-    f = PelicanFileSystem(FED)
-
-    def report(ds):
-        dv = list(ds.data_vars)
-        print(f"    OK dims={dict(ds.sizes)}")
-        print(f"    vars({len(dv)}): {dv[:16]}")
-        latn = next((c for c in ("latitude", "lat", "XLAT") if c in ds), None)
-        lonn = next((c for c in ("longitude", "lon", "XLONG") if c in ds), None)
-        print(f"    coords lat={latn} lon={lonn} | coords={list(ds.coords)[:10]}")
-        return latn, lonn
-
-    # Strategy A: PelicanMap + open_zarr (consolidated then not)
+    print(f"OPEN [{label}] {ref_url}"); line()
+    try:
+        refs = http_json(ref_url)
+        nkeys = len(refs.get("refs", refs))
+        print(f"    fetched reference ({nkeys} keys)")
+    except Exception as e:
+        print(f"    fetch FAIL {type(e).__name__}: {str(e)[:160]}"); return None
     for consolidated in (True, False):
         try:
-            m = PelicanMap(path, pelfs=f)
-            ds = xr.open_zarr(m, consolidated=consolidated)
-            print(f"    [A consolidated={consolidated}] success")
-            report(ds)
+            fs = fsspec.filesystem("reference", fo=refs, remote_protocol="https")
+            ds = xr.open_dataset(fs.get_mapper(""), engine="zarr",
+                                 consolidated=consolidated, chunks={})
+            print(f"    [consolidated={consolidated}] OK dims={dict(ds.sizes)}")
+            dv = list(ds.data_vars)
+            print(f"    vars({len(dv)}): {dv[:24]}")
+            print(f"    coords: {list(ds.coords)[:12]}")
             return ds
         except Exception as e:
-            print(f"    [A consolidated={consolidated}] {type(e).__name__}: {str(e)[:140]}")
-
-    # Strategy B: get_mapper
-    try:
-        m = f.get_mapper(path)
-        ds = xr.open_zarr(m, consolidated=False)
-        print("    [B get_mapper] success"); report(ds); return ds
-    except Exception as e:
-        print(f"    [B get_mapper] {type(e).__name__}: {str(e)[:140]}")
-
-    print()
+            print(f"    [consolidated={consolidated}] {type(e).__name__}: {str(e)[:150]}")
     return None
 
 
-def extract(ds):
+def extract_conus404(ds):
     if ds is None:
         return
-    print("POINT EXTRACTION"); line()
+    print("CONUS404 POINT EXTRACTION (curvilinear nearest cell)"); line()
+    import numpy as np
     try:
-        latn = "latitude" if "latitude" in ds else ("lat" if "lat" in ds else None)
-        lonn = "longitude" if "longitude" in ds else ("lon" if "lon" in ds else None)
-        var = next((v for v in ("VAR_2T", "2t", "t2m", "T2", "SNOW_ACC_NC",
-                                "SNOWH", "VAR_10U", "10u") if v in ds.data_vars),
+        latn = next(c for c in ("XLAT", "lat", "latitude") if c in ds)
+        lonn = next(c for c in ("XLONG", "lon", "longitude") if c in ds)
+        lat2d = np.asarray(ds[latn].values)
+        lon2d = np.asarray(ds[lonn].values)
+        if lat2d.ndim == 3:
+            lat2d, lon2d = lat2d[0], lon2d[0]
+        d = (lat2d - LAT) ** 2 + (np.where(lon2d > 180, lon2d - 360, lon2d) - LON) ** 2
+        iy, ix = np.unravel_index(int(np.argmin(d)), d.shape)
+        print(f"    nearest cell idx=({iy},{ix}) at "
+              f"({float(lat2d[iy, ix]):.3f},{float(lon2d[iy, ix]):.3f})")
+        var = next((v for v in ("SNOW", "SNOWH", "T2", "PREC_ACC_NC", "ACSNOW",
+                                "U10", "V10") if v in ds.data_vars),
                    list(ds.data_vars)[0])
-        lon = LON % 360 if float(ds[lonn].max()) > 180 else LON
-        pt = ds[var].sel({latn: LAT, lonn: lon}, method="nearest")
-        print(f"    var={var} cell=({float(pt[latn]):.3f},{float(pt[lonn]):.3f}) "
-              f"time={ds.sizes.get('time')}")
-        sample = pt.isel(time=slice(0, 3)).values if "time" in pt.dims else pt.values
-        print(f"    sample values: {sample}")
+        ydim, xdim = ds[var].dims[-2], ds[var].dims[-1]
+        pt = ds[var].isel({ydim: iy, xdim: ix})
+        sample = pt.isel(Time=slice(0, 3)).values if "Time" in pt.dims else (
+            pt.isel(time=slice(0, 3)).values if "time" in pt.dims else pt.values)
+        print(f"    {var} sample: {sample}")
     except Exception as e:
         print(f"    extract ERR {type(e).__name__}: {str(e)[:160]}")
+        traceback.print_exc()
+    print()
+
+
+def inspect_era5():
+    print("ERA5 SUBSTORE / KERCHUNK INSPECTION"); line()
+    from pelicanfs.core import PelicanFileSystem
+    f = PelicanFileSystem(HTTPS)
+    for p in (f"{NS}/d633000/e5.oper.an.sfc.zarr",
+              f"{NS}/d633000/kerchunk"):
+        try:
+            items = f.ls(p, detail=False)
+            print(f"  {p} ({len(items)})")
+            for it in items[:20]:
+                print(f"      {it}")
+            if len(items) > 20:
+                print(f"      ... (+{len(items)-20})")
+            # one level deeper into first dir
+            subs = [i for i in items if i.endswith("/")]
+            if subs:
+                child = f.ls(subs[0], detail=False)
+                print(f"    child {subs[0]} ({len(child)}): {child[:8]}")
+        except Exception as e:
+            print(f"  {p} ERR {type(e).__name__}: {str(e)[:140]}")
     print()
 
 
 def main():
-    print("=" * 72); print("GDEX PROBE v2"); print("=" * 72)
+    print("=" * 72); print("GDEX PROBE v3 (kerchunk/https)"); print("=" * 72)
+    # CONUS404 surface (2d) for a recent water year
+    ref = f"{HTTPS}{NS}/d559000/kerchunk/wy2021.2d-https.json"
+    ds = open_kerchunk(ref, "CONUS404 wy2021 2d")
+    extract_conus404(ds)
     try:
-        era5_keys = discover()
+        inspect_era5()
     except Exception:
-        traceback.print_exc(); era5_keys = []
-
-    # If ERA5 sfc is a single store it will contain zarr.json/.zmetadata/.zgroup.
-    markers = {"zarr.json", ".zmetadata", ".zgroup"}
-    era5_is_store = any(k.rstrip("/").split("/")[-1] in markers for k in era5_keys)
-    print(f"ERA5 sfc looks like a single zarr store: {era5_is_store}\n")
-
-    ds = open_strategies(ERA5_SFC, "ERA5 surface analysis")
-    extract(ds)
-
-    print("PROBE v2 COMPLETE")
+        traceback.print_exc()
+    print("PROBE v3 COMPLETE")
 
 
 if __name__ == "__main__":
