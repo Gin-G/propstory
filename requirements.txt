@@ -1,0 +1,15 @@
+# Core analysis
+numpy
+pandas
+xarray
+zarr
+
+# GDEX / OSDF streaming (the 'osdf://' fsspec backend used by --backend osdf)
+pelicanfs
+
+# Verified fallback backend (--backend hytest)
+intake
+intake-xarray
+
+# Optional: more accurate projected nearest-cell selection
+pyproj

@@ -1,5 +1,10 @@
 # PropStory: 564 Ridge Drive, Kremmling, CO 80459
 
+> 📌 **This is the manual, web-research baseline.** The data-driven version —
+> built from CONUS404 (4 km hydroclimate reanalysis) served by NSF NCAR GDEX —
+> is produced by the `propstory` tool in this repo:
+> `python -m propstory analyze --address "564 Ridge Drive, Kremmling, CO 80459" --out reports/564-ridge-drive-kremmling-gdex.md`
+
 **Zillow ZPID:** 232072355 · **County:** Grand County, CO
 **Question on the table:** *"I might be able to ski out my backyard. But if it never gets enough snow to build a skiable base, it's a poor investment."*
 
