@@ -1,0 +1,39 @@
+name: GDEX access probe
+
+# Trial-and-error harness for reaching NSF NCAR GDEX from an environment with
+# open egress (GitHub-hosted runners). The dev sandbox cannot reach the GDEX
+# hosts, so we iterate here and read the logs.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["claude/**"]
+    paths:
+      - "propstory/gdex_probe.py"
+      - ".github/workflows/gdex-probe.yml"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install GDEX access deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests numpy xarray zarr fsspec aiohttp pelicanfs
+
+      - name: Probe GDEX
+        run: python -m propstory.gdex_probe | tee gdex_probe.log
+
+      - name: Upload probe log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdex-probe-log
+          path: gdex_probe.log
