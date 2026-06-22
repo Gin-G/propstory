@@ -14,7 +14,21 @@ CONUS404 hourly file (SNOW, SNOWH, T2, U10, V10).
 from __future__ import annotations
 
 import io
+import time
 import traceback
+
+
+def retry(fn, attempts=4, base=2.0):
+    """OSDF reads occasionally raise transient payload errors; retry them."""
+    last = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            last = e
+            log(f"       retry {i+1}/{attempts} after {type(e).__name__}: {str(e)[:80]}")
+            time.sleep(base * (i + 1))
+    raise last
 
 LAT, LON = 40.06, -106.39
 HTTPS = "https://osdf-data.gdex.ucar.edu"
@@ -45,19 +59,19 @@ def era5():
     for v, desc in ERA5_VARS.items():
         store = f"{ERA5_SFC}/e5.oper.an.sfc.{v}.zarr"
         try:
-            ds = xr.open_dataset(PelicanMap(store, pelfs=f), engine="zarr",
-                                 consolidated=True)
+            ds = retry(lambda: xr.open_dataset(PelicanMap(store, pelfs=f),
+                                               engine="zarr", consolidated=True))
             var = list(ds.data_vars)[0]
-            la = ds["latitude"]; lo = ds["longitude"]
+            lo = ds["longitude"]
             lonsel = LON % 360 if float(lo.max()) > 180 else LON
             pt = ds[var].sel(latitude=LAT, longitude=lonsel, method="nearest")
             t0 = str(ds.time.values[0])[:13]; t1 = str(ds.time.values[-1])[:13]
             log(f"  {v:4s} [{var}] {desc}")
             log(f"       grid cell ({float(pt.latitude):.2f},{float(pt.longitude):.2f}) "
                 f"time {t0}..{t1} n={ds.sizes.get('time')}")
-            # one recent winter day sample
-            sample = pt.sel(time="2021-01-15T18:00", method="nearest").values
-            log(f"       2021-01-15T18 value = {float(sample):.4f}  units={ds[var].attrs.get('units')}")
+            sample = retry(lambda: float(
+                pt.sel(time="2021-01-15T18:00", method="nearest").values))
+            log(f"       2021-01-15T18 value = {sample:.4f}  units={ds[var].attrs.get('units')}")
         except Exception as e:
             log(f"  {v}: FAIL {type(e).__name__}: {str(e)[:140]}")
     log("")
@@ -70,8 +84,7 @@ def conus404():
     log("CONUS404 (d559000) single hourly NetCDF"); line()
     log(f"  {CONUS404_NC}")
     try:
-        with fsspec.open(CONUS404_NC, "rb") as fo:
-            data = fo.read()
+        data = retry(lambda: fsspec.open(CONUS404_NC, "rb").open().read())
         ds = xr.open_dataset(io.BytesIO(data), engine="h5netcdf")
         log(f"  opened dims={dict(ds.sizes)}")
         vars_ = [v for v in ("SNOW", "SNOWH", "T2", "U10", "V10",
