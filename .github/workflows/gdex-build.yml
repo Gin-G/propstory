@@ -1,0 +1,51 @@
+name: GDEX propstory build
+
+# Builds the property's history from GDEX (ERA5 now; CONUS404 next) and uploads
+# plots + tables + summary as workflow artifacts. GDEX is the only data source.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lat:
+        description: "Property latitude"
+        default: "40.06"
+      lon:
+        description: "Property longitude"
+        default: "-106.39"
+      start_wy:
+        description: "Earliest water year"
+        default: "1991"
+      end_wy:
+        description: "Latest water year"
+        default: "2025"
+
+jobs:
+  era5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests numpy pandas xarray zarr "dask[array]" \
+                      h5netcdf h5py fsspec aiohttp pelicanfs matplotlib
+      - name: Build ERA5 propstory
+        env:
+          PROP_LAT: ${{ inputs.lat }}
+          PROP_LON: ${{ inputs.lon }}
+          START_WY: ${{ inputs.start_wy }}
+          END_WY: ${{ inputs.end_wy }}
+          OUT_DIR: artifacts
+        run: python -m propstory.build_era5 | tee artifacts_build.log
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: era5-propstory
+          path: |
+            artifacts/**
+            artifacts_build.log
