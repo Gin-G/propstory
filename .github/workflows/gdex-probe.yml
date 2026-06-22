@@ -26,7 +26,7 @@ jobs:
       - name: Install GDEX access deps
         run: |
           python -m pip install --upgrade pip
-          pip install requests numpy xarray zarr fsspec aiohttp pelicanfs
+          pip install requests numpy pandas xarray zarr "dask[array]" h5netcdf fsspec aiohttp pelicanfs
 
       - name: Probe GDEX
         run: python -m propstory.gdex_probe | tee gdex_probe.log
