@@ -1,100 +1,101 @@
 # PropStory
 
-**Build the historical representation of any address from analysis-ready
-geoscience data served by NSF NCAR's Geoscience Data Exchange (GDEX).**
+**Enter an address → get its climate history (tables, plots, map) built from
+NSF NCAR's Geoscience Data Exchange (GDEX).**
 
-Give PropStory a street address (or a lat/lon). It geocodes the location,
-pulls the matching grid cell from **CONUS404** — NCAR/USGS's 4 km, ~40-year
-(WY 1980–2022) hourly hydroclimate reanalysis — directly from **GDEX via the
-Open Science Data Federation (OSDF)**, and renders a multi-decade "propstory":
-how much it snows, whether a skiable base actually builds and holds, how windy
-it is, and how all of that has trended over time.
-
-This is the data-driven answer to questions like *"if I buy this ridge to ski
-out my backyard, does it actually get — and hold — enough snow?"*
+The data is GDEX ERA5 (`d633000`, hourly 1940–present, 0.25°) and, where higher
+resolution matters, CONUS404 (`d559000`, 4 km). All weather/climate numbers
+trace back to GDEX.
 
 ---
 
-## Why CONUS404 from GDEX
+## How it works
 
-- **Analysis-ready.** GDEX serves CONUS404 as cloud-optimized **Zarr**,
-  streamable with `xarray` over **OSDF/PelicanFS** — no NCAR HPC account, no
-  bulk download. See GDEX's OSDF integration: `https://gdex.ucar.edu/about-gdex/ndcc-osdf/`.
-- **High resolution.** 4 km dynamical downscaling of ERA5 (WRF) resolves
-  mountain terrain far better than the ~31 km ERA5 grid or a single valley
-  weather station — important for a ridge that behaves nothing like the town
-  below it.
-- **Long and consistent.** Hourly, water years 1980–2022 — long enough to
-  characterize *interannual variability and trend*, not just an average year.
-- **The right variables.** Snow water equivalent (`SNOW`), snow depth
-  (`SNOWH`), precipitation (`PREC_ACC_NC`), 2 m temperature (`T2`), and 10 m
-  winds (`U10`,`V10`).
+```
+address ──▶ geocode (browser) ──▶ snap to 0.25° ERA5 grid cell
+                                        │
+                       ┌────────────────┴───────────────┐
+                       ▼                                 ▼
+        FAST PATH (default)                  LIVE FALLBACK (slow)
+   fetch web/data/<cell>.json  ◀── precompute ──  read GDEX Zarr in-browser
+   (one ~45 KB request, instant)   (CI, GDEX)     with zarrita (tens of s+)
+                       │
+                       ▼
+        tables · charts · records · map   (web/app.js)
+```
 
-GDEX dataset: **`d559000`** (formerly RDA `ds559.0`).
-OSDF namespace: `osdf:///ncar/gdex/d559000/…`
+### Why the precompute layer exists (the key finding)
+GDEX's ERA5 stores are **area-chunked** (great for "a map at time T", bad for "one
+point over many years" — a point fans out into thousands of chunk requests).
+Reading a point live in the browser therefore takes tens of seconds to minutes.
 
-> ⚠️ **Note on caveats baked into the science:** CONUS404 underestimates
-> mountain SWE by ~15% vs. SNOTEL, and a 4 km cell still *averages over*
-> sub-grid features — it cannot see wind-scour of a single ridgeline crest.
-> PropStory reports these caveats alongside every number.
+The fix: precompute a **point-optimized** artifact. `build_cache.py` reads GDEX
+once (in CI), aggregates hourly→**daily** + monthly climatology + records, and
+writes a compact **one-file-per-cell JSON**. The browser fetches that in a single
+request → instant. (See the format discussion: time-aggregated, point-local,
+one file per cell. Sharded time-contiguous Zarr is the bigger-scale version.)
+
+### Proven against GDEX (in CI)
+- **CORS is open** (`Access-Control-Allow-Origin: *`) on the OSDF origin + caches,
+  so a static page can read GDEX directly. Stores are **Zarr v2 / consolidated**.
+- Real values land at the property for ERA5 (snow/temp/wind, 1940–2025) and
+  CONUS404 4 km (cell ~on the parcel).
+- End-to-end pipeline verified: GDEX → cache JSON → headless-browser render.
 
 ---
-
-## Install
-
-```bash
-pip install -r requirements.txt
-# core: numpy, pandas, xarray, zarr
-# GDEX/OSDF streaming: pelicanfs   (the 'osdf://' fsspec backend)
-# nicer point selection: pyproj    (optional)
-```
-
-## Use
-
-```bash
-# Full data-driven propstory for an address (needs network + GDEX/OSDF reachable)
-python -m propstory analyze --address "564 Ridge Drive, Kremmling, CO 80459" \
-    --out reports/564-ridge-drive-kremmling.md
-
-# Skip geocoding by passing coordinates directly
-python -m propstory analyze --lat 40.0586 --lon -106.3884 --label "564 Ridge Dr" \
-    --out reports/ridge.md
-
-# See exactly what would be fetched, without touching the network
-python -m propstory analyze --address "564 Ridge Drive, Kremmling, CO" --dry-run
-
-# Validate the full pipeline offline on a synthetic CONUS404-like cube
-python -m propstory demo --out reports/_demo.md
-```
-
-### Backends
-
-| `--backend` | Source | Notes |
-|---|---|---|
-| `osdf` (default) | GDEX `d559000` via OSDF/PelicanFS | What the user asked for. Confirm the exact zarr leaf against the GDEX catalog. |
-| `hytest` | HyTEST intake catalog (CONUS404 on OSN/AWS) | Same data, well-published zarr paths; a verified fallback. |
-
-## What you get
-
-A markdown report with, per the located grid cell:
-
-- **Snow:** mean/median annual snowfall, peak SWE and its typical date, the
-  spread between the best and worst years on record.
-- **Skiable base:** days per season with ≥12" snow depth, season start/end,
-  and how reliable that is year to year (the actual investment question).
-- **Wind:** mean and peak winds, count of high-wind days, by season.
-- **Trend:** linear change per decade in snowfall, peak SWE, and skiable days.
-- **Provenance:** dataset id, grid cell lat/lon and distance from the address,
-  variables, and the science caveats above.
 
 ## Layout
 
 ```
+web/
+  index.html        UI (address box, map, charts, tables)
+  app.js            fast-path JSON render + live-GDEX fallback (zarrita, lazy)
+  data/<cell>.json  precomputed, point-optimized cells (GDEX-sourced)
+  test/smoke.mjs    headless-browser test of the real flow
 propstory/
-  geocode.py      address -> lat/lon (+ elevation)
-  conus404.py     open CONUS404 from GDEX/OSDF (or HyTEST); nearest-cell select
-  climatology.py  point time series -> historical metrics
-  report.py       metrics -> markdown propstory
-  cli.py          `analyze`, `demo`, `--dry-run`
-reports/          generated propstories
+  gdex.py           GDEX access recipe (ERA5 per-var Zarr, CONUS404 kerchunk/nc, retry)
+  build_cache.py    GDEX → daily + climatology + records → web/data/<cell>.json
+  build_era5.py     standalone ERA5 climatology report (CSV/PNG artifacts)
+  gdex_probe.py     CI probe used to reverse-engineer GDEX access
+.github/workflows/
+  pipeline.yml      build cache (idempotent) → serve → headless smoke → commit + artifacts
+  gdex-probe.yml    GDEX access probe (manual/iteration)
+  web-test.yml      manual live-path smoke test
+reports/            manual + data-driven property write-ups
 ```
+
+## Run it
+
+**Locally** (needs network to GDEX for live cells; precomputed cells work offline):
+```bash
+python -m http.server 8080 --directory web   # open http://localhost:8080
+```
+
+**Precompute a cell** (GDEX-sourced, run where GDEX is reachable, e.g. CI):
+```bash
+pip install -r requirements.txt
+PROP_LAT=40.06 PROP_LON=-106.39 START_WY=2021 END_WY=2025 \
+  python -m propstory.build_cache       # writes web/data/40.00_-106.50.json
+```
+
+**CI pipeline:** push to a `claude/**` branch (or run `pipeline.yml`) to build the
+cache, render it in headless Chromium, commit the JSON, and upload the screenshot.
+
+## Cell JSON schema (`propstory/era5-cell/v1`)
+`property`, `grid_cell`, `water_years`, `means`, `records` (value + date),
+`monthly_climatology`, `by_year[]`, and a compact `daily` series for the chart.
+
+---
+
+## Open items
+- **Deployment / URL.** The app runs locally and in CI today. A public URL needs
+  GitHub Pages (Pages on a *private* repo requires a paid plan) — or make the
+  repo public, or host the static `web/` elsewhere.
+- **Satellite imagery.** The map currently uses Esri World Imagery as a
+  placeholder. Whether GDEX serves browsable Sentinel-2 is **unconfirmed** (its
+  catalog search is client-rendered); needs resolution or a dedicated imagery
+  source while keeping climate data on GDEX.
+- **Coverage.** One cell is cached; generalize via a batch (region) precompute or
+  on-demand (issue-triggered) cache generation.
+- **Resolution caveat.** ERA5 0.25° (~31 km) smooths terrain and under-represents
+  ridgetop wind/snow; CONUS404 4 km is the higher-fidelity option (heavier).
