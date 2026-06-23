@@ -62,6 +62,44 @@ function renderSummary(d) {
     </tbody>`;
   const dates = d.daily.t.map((s) => new Date(s + "T00:00:00Z"));
   drawChart($("ch_snow"), dates, d.daily.swe_in);
+
+  // monthly snow-depth climatology (water-year order Oct..Sep)
+  const clim = d.monthly_climatology && d.monthly_climatology.depth_in;
+  if (clim) {
+    const order = [9, 10, 11, 0, 1, 2, 3, 4, 5, 6, 7, 8]; // Oct..Sep (0-indexed months)
+    const labels = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"];
+    drawBars($("ch_month"), labels, order.map((m) => clim[m] ?? 0), 12);
+  }
+  // year-by-year table
+  if (d.by_year && d.by_year.length) {
+    const rows = d.by_year.map((y) =>
+      `<tr><td>${y.wy}</td><td class="n">${y.peak_swe_in}</td><td class="n">${y.skiable_days}</td>` +
+      `<td class="n">${y.snow_days}</td><td class="n">${y.coldest_f}</td></tr>`).join("");
+    $("tbl_year").innerHTML =
+      `<thead><tr><th>WY</th><th class="n">peak SWE</th><th class="n">ski days</th>` +
+      `<th class="n">snow days</th><th class="n">coldest °F</th></tr></thead><tbody>${rows}</tbody>`;
+  }
+}
+
+function drawBars(canvas, labels, vals, thresh) {
+  const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const c = canvas.getContext("2d"); c.scale(dpr, dpr); c.clearRect(0, 0, w, h);
+  const max = Math.max(0.1, thresh || 0, ...vals), pad = 24, n = vals.length;
+  const bw = (w - pad) / n * 0.7;
+  c.fillStyle = "#9fb0c0"; c.font = "10px system-ui";
+  c.fillText(max.toFixed(0), 2, 12);
+  for (let i = 0; i < n; i++) {
+    const x = pad + (i + 0.15) * (w - pad) / n;
+    const bh = (vals[i] / max) * (h - 2 * pad);
+    c.fillStyle = "#5b9bd5"; c.fillRect(x, h - pad - bh, bw, bh);
+    c.fillStyle = "#9fb0c0"; c.fillText(labels[i], x - 2, h - pad + 11);
+  }
+  if (thresh) {
+    const y = h - pad - (thresh / max) * (h - 2 * pad);
+    c.strokeStyle = "#c0392b"; c.setLineDash([4, 3]); c.beginPath();
+    c.moveTo(pad, y); c.lineTo(w, y); c.stroke(); c.setLineDash([]);
+  }
 }
 
 async function tryCache(key) {

@@ -77,6 +77,10 @@ def daily_for_year(stores, wy):
 def main():
     os.makedirs(OUT, exist_ok=True)
     key, glat, glon = snap_key(LAT, LON)
+    path = f"{OUT}/{key}.json"
+    if os.path.exists(path) and os.environ.get("FORCE") not in ("1", "true", "yes"):
+        log(f"cache {path} already exists; skipping (set FORCE=1 to rebuild)")
+        return
     log(f"cache cell {key} for property {LAT},{LON}  WY{START_WY}-{END_WY}")
 
     stores = {k: gdex.era5_point(LAT, LON, [k])[k]
