@@ -1,0 +1,83 @@
+name: PropStory pipeline (GDEX cache + web smoke)
+
+# End-to-end: build a point-optimized cache from GDEX (Python), then load the
+# static front end in headless Chromium and verify it renders from that cache
+# (fast path). Uploads the cache JSON, the rendered screenshot, and logs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lat: { description: "latitude", default: "40.06" }
+      lon: { description: "longitude", default: "-106.39" }
+      start_wy: { description: "earliest water year", default: "2021" }
+      end_wy: { description: "latest water year", default: "2025" }
+  push:
+    branches: ["claude/**"]
+    paths:
+      - "propstory/build_cache.py"
+      - "propstory/gdex.py"
+      - "web/app.js"
+      - "web/index.html"
+      - "web/test/**"
+      - ".github/workflows/pipeline.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install Python deps
+        run: pip install numpy pandas xarray zarr "dask[array]" fsspec aiohttp pelicanfs
+
+      - name: Build GDEX cache cell
+        env:
+          PROP_LAT: ${{ inputs.lat || '40.06' }}
+          PROP_LON: ${{ inputs.lon || '-106.39' }}
+          START_WY: ${{ inputs.start_wy || '2021' }}
+          END_WY: ${{ inputs.end_wy || '2025' }}
+          OUT_DIR: web/data
+        run: python -m propstory.build_cache | tee cache_build.log
+
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm i playwright
+          npx playwright install --with-deps chromium
+
+      - name: Serve + smoke test (fast path from cache)
+        env:
+          BASE_URL: http://localhost:8080
+          YEARS: "5"
+          TIMEOUT_MS: "120000"
+        run: |
+          nohup python3 -m http.server 8080 --directory web >/dev/null 2>&1 &
+          sleep 2
+          node web/test/smoke.mjs | tee smoke_console.log
+
+      - name: Commit cache to branch
+        if: success()
+        run: |
+          git config user.email "nickco7@gmail.com"
+          git config user.name "Claude"
+          git add web/data
+          git commit -m "data: precomputed GDEX cache cell [skip ci]" || echo "no changes"
+          git push || echo "push skipped"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: propstory-pipeline
+          path: |
+            web/data/**
+            artifacts/**
+            cache_build.log
+            smoke_console.log

@@ -5,12 +5,8 @@ name: Web front-end smoke test
 # and surface errors. Artifacts: run log, table, screenshot.
 
 on:
-  workflow_dispatch:
-  push:
-    branches: ["claude/**"]
-    paths:
-      - "web/**"
-      - ".github/workflows/web-test.yml"
+  workflow_dispatch:   # manual only; the live in-browser read is slow.
+                       # The end-to-end test is pipeline.yml (fast path from cache).
 
 jobs:
   smoke:

@@ -18,6 +18,7 @@ page.on("pageerror", (e) => console.log("PAGEERR>", e.message));
 
 const t0 = Date.now();
 await page.goto(URL, { waitUntil: "domcontentloaded" });
+await page.waitForFunction(() => window.__appReady === true, { timeout: 30000 });
 await page.fill("#years", YEARS);
 await page.click("#go");
 
