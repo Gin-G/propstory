@@ -8,7 +8,7 @@ const BASE = process.env.BASE_URL || "http://localhost:8080";
 // bypass geocoding to isolate GDEX read performance (Kremmling property)
 const URL = `${BASE}/?lat=40.06&lon=-106.39`;
 const YEARS = process.env.YEARS || "2";
-const TIMEOUT_MS = +(process.env.TIMEOUT_MS || 540000);
+const TIMEOUT_MS = +(process.env.TIMEOUT_MS || 300000);
 
 fs.mkdirSync("artifacts", { recursive: true });
 const browser = await chromium.launch();

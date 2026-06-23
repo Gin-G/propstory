@@ -4,7 +4,7 @@
 // time goes (this is the main implementation risk: point reads are slow because
 // the GDEX stores are area-chunked, not point-chunked).
 
-import * as zarr from "https://cdn.jsdelivr.net/npm/zarrita@0.4.3/+esm";
+import * as zarr from "https://esm.sh/zarrita@0.4.0?bundle";
 
 const GDEX = "https://osdf-data.gdex.ucar.edu/ncar/gdex/d633000/e5.oper.an.sfc.zarr";
 const VARS = {            // logical -> {code, varname}

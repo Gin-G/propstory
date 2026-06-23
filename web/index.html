@@ -74,6 +74,18 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script type="module" src="./app.js"></script>
+<script>
+  // surface any uncaught error / module-load failure into the run log
+  function _logErr(m){ const l=document.getElementById('log'); if(l){ l.textContent += m+"\n"; } console.log(m); }
+  window.addEventListener('error', e => _logErr('WINDOW ERROR: ' + (e.message || e.error)));
+  window.addEventListener('unhandledrejection', e => _logErr('PROMISE REJECTION: ' + ((e.reason && e.reason.message) || e.reason)));
+</script>
+<script type="module">
+  import('./app.js').catch(e => {
+    const l = document.getElementById('log');
+    if (l) l.textContent += 'MODULE LOAD FAILED: ' + (e && e.message ? e.message : e) + '\n';
+    console.error(e);
+  });
+</script>
 </body>
 </html>

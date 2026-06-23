@@ -26,6 +26,15 @@ jobs:
           npm init -y
           npm i playwright
           npx playwright install --with-deps chromium
+      - name: CDN diagnostic (which zarrita ESM URLs resolve?)
+        run: |
+          for u in \
+            "https://esm.sh/zarrita@0.4.0?bundle" \
+            "https://esm.sh/zarrita" \
+            "https://cdn.jsdelivr.net/npm/zarrita/+esm" ; do
+            echo "$(curl -s -o /dev/null -w '%{http_code}' "$u")  $u"
+          done
+          echo "npm latest: $(npm view zarrita version 2>/dev/null)"
       - name: Serve site
         run: |
           nohup python3 -m http.server 8080 --directory web >/dev/null 2>&1 &
