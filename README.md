@@ -98,4 +98,11 @@ cache, render it in headless Chromium, commit the JSON, and upload the screensho
 - **Coverage.** One cell is cached; generalize via a batch (region) precompute or
   on-demand (issue-triggered) cache generation.
 - **Resolution caveat.** ERA5 0.25° (~31 km) smooths terrain and under-represents
-  ridgetop wind/snow; CONUS404 4 km is the higher-fidelity option (heavier).
+  ridgetop wind/snow.
+- **CONUS404 4 km feasibility (measured).** Its NetCDF variables are stored
+  *contiguous* (not internally chunked, shape `(1, 1015, 1367)`), so each point
+  read pulls the whole ~5.5 MB field; a point time series costs ~5.5 MB × hours ×
+  vars (daily SNOWH ≈ 2 GB/yr/cell). Kerchunk references the same whole-field
+  chunks, so it doesn't help. → CONUS404 can't be a responsive/scalable per-cell
+  cache from GDEX's raw storage; only a slow one-off high-fidelity deep-dive
+  (sparse sampling) is practical until a rechunked CONUS404 is available.
