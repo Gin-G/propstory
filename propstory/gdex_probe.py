@@ -23,8 +23,8 @@ def log(*a):
 
 def probe_single_nc():
     log("=" * 64); log("CONUS404 single hourly NetCDF — variable chunking"); log("-" * 64)
-    url = ("https://osdf-data.gdex.ucar.edu/ncar/gdex/d559000/wy2024/202401/"
-           "wrf2d_d01_2024-01-15_18:00:00.nc")
+    url = ("https://osdf-data.gdex.ucar.edu/ncar/gdex/d559000/wy2021/202101/"
+           "wrf2d_d01_2021-01-15_18:00:00.nc")
     try:
         ds = gdex.open_conus404_nc(url)
         for v in ("SNOW", "SNOWH", "T2", "U10", "V10", "PREC_ACC_NC"):
@@ -42,8 +42,8 @@ def probe_kerchunk():
     try:
         import numpy as np
         t0 = time.time()
-        ds = gdex.open_conus404_year(2024, "2d")
-        log(f"  opened wy2024 2d kerchunk in {time.time()-t0:.1f}s; dims={dict(ds.sizes)}")
+        ds = gdex.open_conus404_year(2021, "2d")
+        log(f"  opened wy2021 2d kerchunk in {time.time()-t0:.1f}s; dims={dict(ds.sizes)}")
         var = next((v for v in ("SNOWH", "SNOW", "T2") if v in ds.data_vars), None)
         log(f"  using var={var}; vars(sample)={list(ds.data_vars)[:10]}")
         latn = next(c for c in ("XLAT", "XLAT_M", "lat") if c in ds)
