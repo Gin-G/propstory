@@ -1,0 +1,12 @@
+.git
+.github
+propstory
+reports
+__pycache__
+*.pyc
+node_modules
+package*.json
+artifacts
+*.log
+requirements.txt
+.venv

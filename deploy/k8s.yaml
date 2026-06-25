@@ -1,0 +1,59 @@
+# PropStory UI on Kubernetes, served at propstory.nickknows.net.
+# Adjust `image:` to your registry/tag and the ingress class/TLS to your cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: propstory-ui
+  labels: { app: propstory-ui }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: propstory-ui }
+  template:
+    metadata:
+      labels: { app: propstory-ui }
+    spec:
+      containers:
+        - name: ui
+          image: ghcr.io/gin-g/propstory-ui:latest   # <-- set to your registry/tag
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "10m", memory: "32Mi" }
+            limits: { cpu: "200m", memory: "128Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: propstory-ui
+spec:
+  selector: { app: propstory-ui }
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: propstory-ui
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod   # <-- or remove if no cert-manager
+spec:
+  ingressClassName: nginx                               # <-- your ingress class
+  tls:
+    - hosts: [propstory.nickknows.net]
+      secretName: propstory-tls
+  rules:
+    - host: propstory.nickknows.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: propstory-ui
+                port: { number: 80 }
