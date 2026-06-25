@@ -35,5 +35,5 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/propstory-ui:latest
-            ghcr.io/${{ github.repository_owner }}/propstory-ui:${{ github.sha }}
+            ghcr.io/gin-g/propstory-ui:latest
+            ghcr.io/gin-g/propstory-ui:${{ github.sha }}
