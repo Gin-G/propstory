@@ -44,6 +44,8 @@
           <input id="years" type="number" min="1" max="85" value="5" style="width:100%;padding:8px;border-radius:8px;border:1px solid #34465a;background:#0c141d;color:#e6edf3" /></div>
         <div style="align-self:end"><button id="go">Build propstory</button></div>
       </div>
+      <button id="go_live" style="display:none;background:#caa14a">Load live from GDEX (slow ~minutes)</button>
+      <div id="avail" class="muted" style="margin-top:10px"></div>
       <div id="map"></div>
       <p class="muted" id="loc"></p>
     </div>
@@ -77,6 +79,16 @@
     <div class="card" style="margin-top:14px">
       <b>Records (value — when)</b>
       <table id="tbl"><tbody><tr><td class="muted">Run a query to populate.</td></tr></tbody></table>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <p class="muted" style="margin:0">
+        <b>Source:</b> climate from NSF NCAR GDEX — ERA5 reanalysis (<code>d633000</code>),
+        hourly→daily. Values are for the matched 0.25° (~31&nbsp;km) grid cell, which
+        smooths terrain and <b>under-represents ridgetop wind and snow</b>. Snow is
+        ERA5 snow-water-equivalent; “skiable days” is a rough depth proxy. Imagery
+        basemap © Esri (not GDEX). Precomputed cells load instantly; others can be
+        read live from GDEX (slow).
+      </p>
     </div>
   </div>
 </div>

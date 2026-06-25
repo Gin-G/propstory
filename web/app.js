@@ -154,41 +154,94 @@ function decodeTime(values, units) {
   return Array.from(values, (v) => new Date(base + Number(v) * mult));
 }
 
+let chipLoc = null;        // set when a precomputed-location chip is clicked
+let pendingLive = null;    // {loc, years} awaiting explicit "Load live" click
+let timerId = null;
+
+function startTimer(label) {
+  const t0 = performance.now();
+  $("go").disabled = true; $("go_live").disabled = true;
+  timerId = setInterval(() => {
+    $("go").textContent = `${label} ${((performance.now() - t0) / 1000).toFixed(0)}s`;
+  }, 250);
+}
+function stopTimer() {
+  if (timerId) { clearInterval(timerId); timerId = null; }
+  $("go").textContent = "Build propstory"; $("go").disabled = false; $("go_live").disabled = false;
+}
+
+function setMarker(loc) {
+  $("loc").textContent = loc.name || "";
+  map.setView([loc.lat, loc.lon], 13); marker.setLatLng([loc.lat, loc.lon]);
+}
+
 async function build() {
-  $("go").disabled = true;
   logEl.textContent = "";
+  $("go_live").style.display = "none"; pendingLive = null;
+  startTimer("Building…");
   try {
-    const addr = $("addr").value.trim();
     const years = Math.max(1, Math.min(85, +$("years").value || 5));
-    const params = new URLSearchParams(location.search);
     let loc;
-    if (params.has("lat") && params.has("lon")) {
+    const params = new URLSearchParams(location.search);
+    if (chipLoc) { loc = chipLoc; chipLoc = null; log(`location: ${loc.name}`); }
+    else if (params.has("lat") && params.has("lon")) {
       loc = { lat: +params.get("lat"), lon: +params.get("lon"), name: "(coords from URL)" };
       log(`coords from URL: ${loc.lat}, ${loc.lon}`);
     } else {
-      log(`geocoding: ${addr}`); loc = await geocode(addr);
+      log(`geocoding: ${$("addr").value.trim()}`); loc = await geocode($("addr").value.trim());
     }
     log(`→ ${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}`);
-    $("loc").textContent = loc.name;
-    map.setView([loc.lat, loc.lon], 13); marker.setLatLng([loc.lat, loc.lon]);
+    setMarker(loc);
 
     const key = snapKey(loc.lat, loc.lon);
-    log(`grid cell key ${key}; checking precomputed cache …`);
+    log(`grid cell ${key}; checking precomputed cache …`);
     const cached = await tryCache(key);
     if (cached) {
       log("loaded precomputed cell (fast path).");
       renderSummary(cached);
       log("DONE.");
     } else {
-      await liveFromGDEX(loc, years);
-      log("DONE.");
+      log(`no precomputed cell for ${key}.`);
+      pendingLive = { loc, years };
+      $("go_live").style.display = "block";
+      log("click “Load live from GDEX” to read it directly (slow, ~minutes).");
     }
   } catch (e) {
     log("ERROR: " + (e && e.message ? e.message : e));
     console.error(e);
   } finally {
-    $("go").disabled = false;
+    stopTimer();
   }
+}
+
+async function loadLive() {
+  if (!pendingLive) return;
+  const { loc, years } = pendingLive;
+  $("go_live").style.display = "none";
+  startTimer("Reading GDEX…");
+  try { await liveFromGDEX(loc, years); log("DONE."); }
+  catch (e) { log("ERROR: " + (e && e.message ? e.message : e)); console.error(e); }
+  finally { stopTimer(); }
+}
+
+async function loadAvailable() {
+  try {
+    const r = await fetch("./data/index.json", { cache: "no-cache" });
+    if (!r.ok) return;
+    const idx = await r.json();
+    const keys = Object.keys(idx);
+    if (!keys.length) return;
+    const el = $("avail");
+    el.innerHTML = "<b>Instant (precomputed) cells:</b> ";
+    for (const k of keys) {
+      const c = idx[k];
+      const b = document.createElement("button");
+      b.textContent = `${c.grid_lat}, ${c.grid_lon}`;
+      b.style.cssText = "margin:4px 4px 0 0;padding:4px 8px;font-size:12px;background:#24455f;color:#cfe3f5";
+      b.onclick = () => { chipLoc = { lat: c.grid_lat, lon: c.grid_lon, name: `precomputed cell ${k}` }; build(); };
+      el.appendChild(b);
+    }
+  } catch { /* index optional */ }
 }
 
 function drawChart(canvas, times, vals) {
@@ -210,5 +263,7 @@ function drawChart(canvas, times, vals) {
 
 initMap();
 $("go").addEventListener("click", build);
+$("go_live").addEventListener("click", loadLive);
+loadAvailable();
 window.__appReady = true;          // smoke test waits on this before clicking
 log("ready. enter an address and click Build.");

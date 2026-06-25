@@ -13,6 +13,9 @@ spec:
     metadata:
       labels: { app: propstory-ui }
     spec:
+      imagePullSecrets:
+        - name: ghcr        # only needed if the GHCR package is private (see deploy/README.md);
+                            # harmless if the secret is absent and the package is public
       containers:
         - name: ui
           image: ghcr.io/gin-g/propstory-ui:latest   # <-- set to your registry/tag

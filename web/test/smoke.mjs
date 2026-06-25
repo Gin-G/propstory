@@ -32,8 +32,16 @@ const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
 
 await page.screenshot({ path: "artifacts/web_screenshot.png", fullPage: true });
 fs.writeFileSync("artifacts/web_log.txt", logText);
-const snapshot = await page.textContent("#tbl").catch(() => "");
-fs.writeFileSync("artifacts/web_table.txt", snapshot || "");
+
+// log-based render QA (so the rendered values are visible without the image)
+const grab = async (sel) => (await page.textContent(sel).catch(() => "")).replace(/\s+/g, " ").trim();
+const rendered = {
+  peakSWE: await grab("#s_snow"), skiDays: await grab("#s_ski"),
+  wind: await grab("#s_wind"), cold: await grab("#s_cold"),
+  records: await grab("#tbl"), yearRows: (await page.$$("#tbl_year tbody tr")).length,
+};
+fs.writeFileSync("artifacts/web_table.txt", rendered.records);
+console.log("===== RENDERED VALUES =====\n" + JSON.stringify(rendered, null, 2));
 
 console.log(`\n===== TOTAL WALL TIME: ${elapsed}s =====`);
 console.log("===== RUN LOG =====\n" + logText);
