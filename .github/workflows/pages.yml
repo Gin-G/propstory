@@ -36,6 +36,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true   # auto-create the Pages site (needs a plan that allows
+                             # Pages on a private repo; otherwise enable it in Settings → Pages)
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
