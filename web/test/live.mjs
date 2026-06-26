@@ -30,6 +30,25 @@ if (chip) { await chip.click(); await page.waitForTimeout(7000); chipLog = await
 const after = { snow: await grab("#s_snow"), records: await grab("#tbl") };
 await page.screenshot({ path: "artifacts/live.png", fullPage: true });
 
+// Verify the deployed data index + that each advertised cell actually fetches.
+let dataCheck = {};
+try {
+  const base = URL.endsWith("/") ? URL : URL + "/";
+  dataCheck = await page.evaluate(async (base) => {
+    const idx = await (await fetch(base + "data/index.json", { cache: "no-store" })).json();
+    const keys = Object.keys(idx);
+    const cells = {};
+    for (const k of keys) {
+      const r = await fetch(base + "data/" + k + ".json", { cache: "no-store" });
+      const j = r.ok ? await r.json() : null;
+      cells[k] = j
+        ? { ok: true, peak_swe_in: j.means && j.means.peak_swe_in, water_years: j.water_years }
+        : { ok: false, status: r.status };
+    }
+    return { keys, cells };
+  }, base);
+} catch (e) { dataCheck = { error: String(e) }; }
+
 const report = {
   url: URL,
   rendered_snow_before: before.snow,
@@ -38,6 +57,7 @@ const report = {
   log_before: before.log,
   log_after_chip: chipLog,
   records: after.records,
+  data_check: dataCheck,
   console: consoleMsgs,
   request_failures: failed,
   http_4xx_5xx: http4xx,
