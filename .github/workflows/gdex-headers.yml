@@ -1,0 +1,47 @@
+name: GDEX header / redirect probe
+
+# Captures the exact HTTP redirect chain and CORS headers GDEX/OSDF returns for
+# a browser-style cross-origin request (curl can send Origin and dump every hop;
+# a browser's thrown TypeError cannot). Produces a concrete artifact for a CORS
+# bug report to the GDEX/OSDF team: which hop (director vs cache vs origin) is
+# missing Access-Control-Allow-Origin, and whether OPTIONS/Range are handled.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/gdex-headers.yml"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      URL: "https://osdf-data.gdex.ucar.edu/ncar/gdex/d633000/e5.oper.an.sfc.zarr/e5.oper.an.sfc.sd.zarr/.zmetadata"
+      ORIGIN: "https://gin-g.github.io"
+    steps:
+      - name: 1) GET with Origin — full header dump of every redirect hop
+        run: |
+          echo "URL=$URL"; echo "ORIGIN=$ORIGIN"; echo
+          curl -sS -L -D - -o /dev/null -H "Origin: $ORIGIN" "$URL" || true
+
+      - name: 2) Redirect chain summary (effective URL, code, #redirects)
+        run: |
+          curl -sS -o /dev/null -L -H "Origin: $ORIGIN" \
+            -w 'final_url=%{url_effective}\nhttp_code=%{http_code}\nnum_redirects=%{num_redirects}\n' \
+            "$URL" || true
+
+      - name: 3) CORS preflight (OPTIONS) for a ranged GET
+        run: |
+          curl -sS -i -X OPTIONS \
+            -H "Origin: $ORIGIN" \
+            -H "Access-Control-Request-Method: GET" \
+            -H "Access-Control-Request-Headers: range" \
+            "$URL" || true
+
+      - name: 4) Ranged GET (Zarr reads use Range) — show response CORS headers
+        run: |
+          curl -sS -L -D - -o /dev/null \
+            -H "Origin: $ORIGIN" -H "Range: bytes=0-99" \
+            "$URL" || true
