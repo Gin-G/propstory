@@ -3,14 +3,14 @@
 // Fast path (default): fetch a precomputed, point-optimized cell JSON
 //   (web/data/<lat>_<lon>.json, GDEX-sourced, built in CI) in ONE request and
 //   render instantly.
-// Live fallback: if no precompute exists for the cell, read ERA5 straight from
-//   GDEX in the browser with zarrita (slow — area-chunked stores). zarrita is
-//   imported lazily so the page is responsive and the fast path never depends
-//   on a CDN.
+// On-demand path: if no precompute exists for the cell, GDEX cannot be read
+//   from the browser (it serves no CORS headers — a cross-origin fetch fails
+//   with "Failed to fetch", confirmed via a CI browser probe). So instead we
+//   open a pre-filled GitHub issue carrying the geocoded coordinates; an
+//   `on: issues` workflow reads GDEX server-side, commits the cell JSON, and
+//   Pages redeploys. The cell is then on the fast path (~2-3 min later).
 
-const GDEX = "https://osdf-data.gdex.ucar.edu/ncar/gdex/d633000/e5.oper.an.sfc.zarr";
-const LIVE_VARS = { sd: "SD", "2t": "VAR_2T", "10u": "VAR_10U", "10v": "VAR_10V" };
-const MM_PER_IN = 25.4, MS_TO_MPH = 2.23694, SKIABLE_IN = 12;
+const REPO = "Gin-G/propstory";   // where cell-request issues are filed
 
 const $ = (id) => document.getElementById(id);
 const logEl = $("log");
@@ -132,48 +132,22 @@ async function tryCache(key) {
   } catch { return null; }
 }
 
-async function liveFromGDEX(loc, years) {
-  log("no precompute for this cell → live GDEX read (slow; area-chunked) …");
-  const zarr = await import("https://esm.sh/zarrita@0.4.0?bundle");
-  const lonE = ((loc.lon % 360) + 360) % 360;
-  const open = async (code) =>
-    zarr.withConsolidated(new zarr.FetchStore(`${GDEX}/e5.oper.an.sfc.${code}.zarr`));
-  const t0 = performance.now();
-  const sdStore = await open("sd");
-  log(`opened sd metadata in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
-  const latArr = (await zarr.get(await zarr.open(sdStore.resolve("latitude"), { kind: "array" }))).data;
-  const lonArr = (await zarr.get(await zarr.open(sdStore.resolve("longitude"), { kind: "array" }))).data;
-  const ilat = nearest(latArr, loc.lat), ilon = nearest(lonArr, lonE);
-  const timeA = await zarr.open(sdStore.resolve("time"), { kind: "array" });
-  const tvals = (await zarr.get(timeA)).data;
-  const times = decodeTime(tvals, timeA.attrs.units);
-  const end = times.length;
-  const cutoff = +times[end - 1] - years * 365.25 * 864e5;
-  let start = end - 1; while (start > 0 && +times[start] > cutoff) start--;
-  log(`reading last ${years}y (${end - start} steps) at cell ${(+latArr[ilat]).toFixed(2)},${(((+lonArr[ilon] + 180) % 360) - 180).toFixed(2)} …`);
-  const read = async (st, name) => (await zarr.get(
-    await zarr.open(st.resolve(name), { kind: "array" }), [zarr.slice(start, end), ilat, ilon])).data;
-  const sd = await read(sdStore, LIVE_VARS.sd); log("  sd done");
-  const u = await read(await open("10u"), LIVE_VARS["10u"]); log("  10u done");
-  const v = await read(await open("10v"), LIVE_VARS["10v"]); log("  10v done");
-  const swe = Array.from(sd, (x) => (x * 1000) / MM_PER_IN);
-  const wind = Array.from(u, (uu, i) => Math.hypot(uu, v[i]) * MS_TO_MPH);
-  const tw = times.slice(start, end);
-  const iPeak = swe.indexOf(Math.max(...swe));
-  $("s_snow").innerHTML = `${swe[iPeak].toFixed(1)}<small> peak SWE (in)</small>`;
-  $("s_wind").innerHTML = `${(wind.reduce((a, b) => a + b, 0) / wind.length).toFixed(1)}<small> mean wind (mph)</small>`;
-  drawChart($("ch_snow"), tw, swe);
-  log("live render done.");
-}
-
-function nearest(arr, t) { let b = 0, bd = Infinity;
-  for (let i = 0; i < arr.length; i++) { const d = Math.abs(arr[i] - t); if (d < bd) { bd = d; b = i; } } return b; }
-function decodeTime(values, units) {
-  const m = /(seconds|minutes|hours|days) since (\d{4})-(\d{1,2})-(\d{1,2})/i.exec(units || "");
-  if (!m) return Array.from(values, (v) => new Date(Number(v)));
-  const mult = { seconds: 1e3, minutes: 6e4, hours: 36e5, days: 864e5 }[m[1].toLowerCase()];
-  const base = Date.UTC(+m[2], +m[3] - 1, +m[4]);
-  return Array.from(values, (v) => new Date(base + Number(v) * mult));
+// Build a pre-filled GitHub issue URL that the cell-request workflow consumes.
+// The body carries machine-readable lat/lon lines the workflow parses.
+function requestCellUrl(loc, key) {
+  const title = `[cell-request] ${key}`;
+  const body =
+    "PropStory cell request (auto-generated — do not edit the lines below).\n\n" +
+    `address: ${loc.name || "(from coordinates)"}\n` +
+    `lat: ${loc.lat}\n` +
+    `lon: ${loc.lon}\n` +
+    `grid: ${key}\n\n` +
+    "The PropStory bot will read GDEX, build this cell, and close this issue " +
+    "when done (~2-3 min). Then reload PropStory and search this address again.";
+  return `https://github.com/${REPO}/issues/new` +
+    `?title=${encodeURIComponent(title)}` +
+    `&body=${encodeURIComponent(body)}` +
+    "&labels=cell-request";
 }
 
 let chipLoc = null;        // set when a precomputed-location chip is clicked
@@ -223,10 +197,12 @@ async function build() {
       renderSummary(cached);
       log("DONE.");
     } else {
-      log(`no precomputed cell for ${key}.`);
-      pendingLive = { loc, years };
+      log(`no precomputed cell for ${key} yet.`);
+      pendingLive = { loc, key };
       $("go_live").style.display = "block";
-      log("click “Load live from GDEX” to read it directly (slow, ~minutes).");
+      log("GDEX serves no browser CORS, so this cell is built server-side from GDEX.");
+      log("click “Request this location” to open a GitHub issue that builds it");
+      log("(~2-3 min), then reload PropStory and search again.");
     }
   } catch (e) {
     log("ERROR: " + (e && e.message ? e.message : e));
@@ -236,14 +212,14 @@ async function build() {
   }
 }
 
-async function loadLive() {
+function loadLive() {
   if (!pendingLive) return;
-  const { loc, years } = pendingLive;
-  $("go_live").style.display = "none";
-  startTimer("Reading GDEX…");
-  try { await liveFromGDEX(loc, years); log("DONE."); }
-  catch (e) { log("ERROR: " + (e && e.message ? e.message : e)); console.error(e); }
-  finally { stopTimer(); }
+  const { loc, key } = pendingLive;
+  const url = requestCellUrl(loc, key);
+  window.open(url, "_blank", "noopener");
+  log(`opened a GitHub issue to build cell ${key}.`);
+  log("the bot reads GDEX, commits the cell, and Pages redeploys (~2-3 min).");
+  log("reload this page and search again once the issue is closed.");
 }
 
 async function loadAvailable() {

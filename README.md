@@ -16,30 +16,41 @@ address ──▶ geocode (browser) ──▶ snap to 0.25° ERA5 grid cell
                                         │
                        ┌────────────────┴───────────────┐
                        ▼                                 ▼
-        FAST PATH (default)                  LIVE FALLBACK (slow)
-   fetch web/data/<cell>.json  ◀── precompute ──  read GDEX Zarr in-browser
-   (one ~45 KB request, instant)   (CI, GDEX)     with zarrita (tens of s+)
-                       │
-                       ▼
+        FAST PATH (default)                ON-DEMAND PATH (uncached cell)
+   fetch web/data/<cell>.json        open pre-filled "[cell-request]" issue
+   (one ~45 KB request, instant)  ──▶  `on: issues` workflow reads GDEX,
+                       │                commits the cell JSON, Pages redeploys
+                       ▼                       (~2-3 min, then on fast path)
         tables · charts · records · map   (web/app.js)
 ```
 
 ### Why the precompute layer exists (the key finding)
 GDEX's ERA5 stores are **area-chunked** (great for "a map at time T", bad for "one
-point over many years" — a point fans out into thousands of chunk requests).
-Reading a point live in the browser therefore takes tens of seconds to minutes.
+point over many years" — a point fans out into thousands of chunk requests), so a
+point time-series is slow to assemble. The deeper constraint: **GDEX serves no
+CORS headers**, so a browser cannot read it at all — a cross-origin `fetch` fails
+with `TypeError: Failed to fetch` (confirmed by a real-browser CI probe,
+`web/test/gdex-cors.mjs`; `curl` masks this because it sends no `Origin`). GDEX
+must therefore be read **server-side**, in CI.
 
 The fix: precompute a **point-optimized** artifact. `build_cache.py` reads GDEX
 once (in CI), aggregates hourly→**daily** + monthly climatology + records, and
-writes a compact **one-file-per-cell JSON**. The browser fetches that in a single
-request → instant. (See the format discussion: time-aggregated, point-local,
+writes a compact **one-file-per-cell JSON**. The browser fetches that same-origin
+from Pages in a single request → instant. (Format: time-aggregated, point-local,
 one file per cell. Sharded time-contiguous Zarr is the bigger-scale version.)
 
+### On-demand cells (issue-triggered)
+For an address with no precomputed cell, the front end opens a pre-filled
+**`[cell-request]`** GitHub issue carrying the geocoded coordinates.
+`cell-request.yml` (`on: issues`) parses them, runs `build_cache.py` against
+GDEX, commits `web/data/<cell>.json` to `main`, and closes the issue; the push
+redeploys Pages, putting the cell on the fast path. No server, no browser→GDEX
+access required.
+
 ### Proven against GDEX (in CI)
-- **CORS is open** (`Access-Control-Allow-Origin: *`) on the OSDF origin + caches,
-  so a static page can read GDEX directly. Stores are **Zarr v2 / consolidated**.
-- Real values land at the property for ERA5 (snow/temp/wind, 1940–2025) and
-  CONUS404 4 km (cell ~on the parcel).
+- Stores are **Zarr v2 / consolidated**, read via PelicanFS/OSDF + xarray + dask.
+- Real values land at the property for ERA5 (snow/temp/wind, 1940–2025).
+- **GDEX is not browser-readable** (no CORS) — all GDEX access is server-side (CI).
 - End-to-end pipeline verified: GDEX → cache JSON → headless-browser render.
 
 ---
@@ -49,7 +60,7 @@ one file per cell. Sharded time-contiguous Zarr is the bigger-scale version.)
 ```
 web/
   index.html        UI (address box, map, charts, tables)
-  app.js            fast-path JSON render + live-GDEX fallback (zarrita, lazy)
+  app.js            fast-path JSON render + on-demand "[cell-request]" issue opener
   data/<cell>.json  precomputed, point-optimized cells (GDEX-sourced)
   test/smoke.mjs    headless-browser test of the real flow
 propstory/
@@ -59,6 +70,8 @@ propstory/
   gdex_probe.py     CI probe used to reverse-engineer GDEX access
 .github/workflows/
   pipeline.yml      build cache (idempotent) → serve → headless smoke → commit + artifacts
+  cell-request.yml  on: issues → build requested GDEX cell → commit → close issue
+  gdex-cors.yml     real-browser probe proving GDEX has no CORS (server-side only)
   gdex-probe.yml    GDEX access probe (manual/iteration)
   web-test.yml      manual live-path smoke test
 reports/            manual + data-driven property write-ups

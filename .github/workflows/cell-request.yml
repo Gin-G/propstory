@@ -1,0 +1,104 @@
+name: Build requested GDEX cell
+
+# On-demand cell builder. The front end opens a pre-filled "[cell-request]"
+# issue carrying geocoded coordinates (GDEX has no browser CORS, so it must be
+# read server-side). This workflow parses the coordinates, reads ERA5 from GDEX,
+# commits the compact per-cell JSON to web/data/, then comments and closes the
+# issue. Pushing web/data/ to main triggers the Pages deploy automatically.
+
+on:
+  issues:
+    types: [opened, reopened, edited]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: cell-build          # serialize builds so pushes to main don't race
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: startsWith(github.event.issue.title, '[cell-request]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Parse coordinates from issue body
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import os, re
+          b = os.environ.get("ISSUE_BODY", "")
+          def grab(k):
+              m = re.search(rf'^{k}:\s*(-?\d+(?:\.\d+)?)', b, re.M)
+              return m.group(1) if m else ""
+          lat, lon = grab("lat"), grab("lon")
+          if not (lat and lon):
+              raise SystemExit("could not parse 'lat:'/'lon:' lines from issue body")
+          la = round(float(lat) / 0.25) * 0.25
+          lo = round(float(lon) / 0.25) * 0.25
+          if lo > 180: lo -= 360
+          print(f"PROP_LAT={lat}")
+          print(f"PROP_LON={lon}")
+          print(f"CELL_KEY={la:.2f}_{lo:.2f}")
+          PY
+          echo "Parsed PROP_LAT=$PROP_LAT PROP_LON=$PROP_LON CELL_KEY=$CELL_KEY"
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install Python deps
+        run: pip install numpy pandas xarray zarr "dask[array]" fsspec aiohttp pelicanfs
+
+      - name: Build GDEX cache cell
+        env:
+          START_WY: "2021"
+          END_WY: "2025"
+          OUT_DIR: web/data
+        run: python -m propstory.build_cache | tee cache_build.log
+
+      - name: Commit cell to main
+        run: |
+          git config user.email "nickco7@gmail.com"
+          git config user.name "Claude"
+          git add web/data
+          if git diff --cached --quiet; then
+            echo "BUILD_RESULT=already available (no new data)" >> "$GITHUB_ENV"
+          else
+            git commit -m "data: GDEX cell ${CELL_KEY} (issue #${{ github.event.issue.number }})"
+            git push origin main
+            echo "BUILD_RESULT=built and committed" >> "$GITHUB_ENV"
+          fi
+
+      - name: Comment and close issue
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const num = context.payload.issue.number;
+            const key = process.env.CELL_KEY || "(unknown)";
+            const ok = "${{ job.status }}" === "success";
+            const body = ok
+              ? `✅ Cell \`${key}\` ${process.env.BUILD_RESULT || "processed"} from GDEX (ERA5).\n\n`
+                + `It will be live on PropStory within ~1–2 min once GitHub Pages redeploys. `
+                + `Reload PropStory and search this address again.`
+              : `❌ Could not build this cell automatically. The coordinates may be `
+                + `outside ERA5 coverage, or GDEX read failed. See the workflow run logs.`;
+            await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: num, body });
+            if (ok) {
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: num, state: "closed" });
+            }
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cell-${{ github.event.issue.number }}
+          path: |
+            web/data/**
+            cache_build.log
