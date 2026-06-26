@@ -36,9 +36,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true   # auto-create the Pages site (needs a plan that allows
-                             # Pages on a private repo; otherwise enable it in Settings → Pages)
+        # NOTE: the workflow token cannot auto-create the Pages site here
+        # ("Resource not accessible by integration"). Enable Pages once, manually:
+        # Settings → Pages → Build and deployment → Source: "GitHub Actions".
+        # Then pushes deploy automatically.
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
