@@ -1,0 +1,40 @@
+name: Live Pages check
+
+# Loads the deployed Pages site in headless Chromium and reports console errors,
+# failed requests, and whether data renders. Diagnoses the live site.
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Site URL to check"
+        default: "https://gin-g.github.io/propstory/"
+  push:
+    branches: ["claude/**", "main"]
+    paths:
+      - "web/test/live.mjs"
+      - ".github/workflows/pages-check.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: |
+          npm init -y
+          npm i playwright
+          npx playwright install --with-deps chromium
+      - name: Check live site
+        env:
+          SITE_URL: ${{ inputs.url || 'https://gin-g.github.io/propstory/' }}
+        run: node web/test/live.mjs | tee live_console.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-check
+          path: |
+            artifacts/**
+            live_console.log

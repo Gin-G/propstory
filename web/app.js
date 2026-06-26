@@ -30,12 +30,34 @@ function initMap(lat = 40.06, lon = -106.39) {
 }
 
 async function geocode(addr) {
-  const url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=" +
-    encodeURIComponent(addr);
-  const r = await fetch(url, { headers: { "Accept": "application/json" } });
-  const j = await r.json();
-  if (!j.length) throw new Error("address not found");
-  return { lat: +j[0].lat, lon: +j[0].lon, name: j[0].display_name };
+  // 1) Open-Meteo geocoding: CORS-friendly and reliable from browsers. It's
+  //    city-level, which is plenty for the 0.25° ERA5 grid. Try the full string,
+  //    then progressively simpler "town, region" / "town" forms.
+  const parts = addr.split(",").map((s) => s.trim()).filter(Boolean);
+  const tries = [addr];
+  if (parts.length > 1) { tries.push(parts.slice(1).join(", ")); tries.push(parts[parts.length - 2] || parts[0]); }
+  for (const q of tries) {
+    try {
+      const r = await fetch("https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&name=" +
+        encodeURIComponent(q));
+      if (r.ok) {
+        const j = await r.json();
+        if (j.results && j.results.length) {
+          const g = j.results[0];
+          return { lat: g.latitude, lon: g.longitude,
+                   name: [g.name, g.admin1, g.country_code].filter(Boolean).join(", ") };
+        }
+      }
+    } catch (e) { /* try next form / provider */ }
+  }
+  // 2) Nominatim fallback (handles full street addresses)
+  try {
+    const r = await fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=" +
+      encodeURIComponent(addr), { headers: { Accept: "application/json" } });
+    const j = await r.json();
+    if (j.length) return { lat: +j[0].lat, lon: +j[0].lon, name: j[0].display_name };
+  } catch (e) { /* fall through */ }
+  throw new Error("could not geocode that address — try a town/city name");
 }
 
 function snapKey(lat, lon) {
@@ -240,6 +262,14 @@ async function loadAvailable() {
       b.style.cssText = "margin:4px 4px 0 0;padding:4px 8px;font-size:12px;background:#24455f;color:#cfe3f5";
       b.onclick = () => { chipLoc = { lat: c.grid_lat, lon: c.grid_lon, name: `precomputed cell ${k}` }; build(); };
       el.appendChild(b);
+    }
+    // auto-load the first precomputed cell so data shows immediately (no click,
+    // no geocoding). Skipped when coords are supplied via URL (e.g. smoke test).
+    const params = new URLSearchParams(location.search);
+    if (!params.has("lat") && !params.has("lon")) {
+      const c = idx[keys[0]];
+      chipLoc = { lat: c.grid_lat, lon: c.grid_lon, name: `precomputed cell ${keys[0]}` };
+      build();
     }
   } catch { /* index optional */ }
 }
