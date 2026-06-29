@@ -1,0 +1,21 @@
+{
+  "QuantizeGranularBitGroomNumberOfSignificantDigits": 7,
+  "ecmwf_local_table": 128,
+  "ecmwf_parameter": 165,
+  "grid_specification": "0.25 degree x 0.25 degree from 90N to 90S and 0E to 359.75E (721 x 1440 Latitude/Longitude)",
+  "long_name": "10 metre U wind component",
+  "maximum_value": 30.102508544921875,
+  "minimum_value": -30.803512573242188,
+  "original_format": "WMO GRIB 1 with ECMWF local table",
+  "rda_dataset": "ds633.0",
+  "rda_dataset_doi": "DOI: 10.5065/BH6N-5N20",
+  "rda_dataset_group": "ERA5 atmospheric surface analysis [netCDF4]",
+  "rda_dataset_url": "https:/rda.ucar.edu/datasets/ds633.0/",
+  "short_name": "10u",
+  "units": "m s**-1",
+  "_ARRAY_DIMENSIONS": [
+    "time",
+    "latitude",
+    "longitude"
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "schema": "propstory/era5-arco/v1",
+  "dataset": "GDEX d633000 ERA5 \u2192 daily, time-contiguous rechunk",
+  "store": "era5_co_daily.zarr",
+  "bbox": {
+    "lat_min": 39.0,
+    "lat_max": 41.0,
+    "lon_min": -107.0,
+    "lon_max": -105.0
+  },
+  "grid_deg": 0.25,
+  "water_years": [
+    2021,
+    2025
+  ],
+  "vars": [
+    "swe_in",
+    "t2f_min",
+    "t2f_mean",
+    "t2f_max",
+    "wind_mph"
+  ],
+  "time_start": "2020-10-01",
+  "n_time": 1734,
+  "lat": [
+    41.0,
+    40.75,
+    40.5,
+    40.25,
+    40.0,
+    39.75,
+    39.5,
+    39.25,
+    39.0
+  ],
+  "lon": [
+    -107.0,
+    -106.75,
+    -106.5,
+    -106.25,
+    -106.0,
+    -105.75,
+    -105.5,
+    -105.25,
+    -105.0
+  ]
+}
