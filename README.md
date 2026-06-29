@@ -50,8 +50,25 @@ access required.
 ### Proven against GDEX (in CI)
 - Stores are **Zarr v2 / consolidated**, read via PelicanFS/OSDF + xarray + dask.
 - Real values land at the property for ERA5 (snow/temp/wind, 1940–2025).
-- **GDEX is not browser-readable** (no CORS) — all GDEX access is server-side (CI).
 - End-to-end pipeline verified: GDEX → cache JSON → headless-browser render.
+
+### Browser CORS: the nginx alias is broken; the Pelican director works
+A browser-style cross-origin request was traced hop by hop (`web/test/gdex-cors.mjs`,
+`gdex-headers.yml`, `pelican-direct.mjs`):
+
+| Hop | Host | Status | `Access-Control-Allow-Origin` |
+|-----|------|--------|-------------------------------|
+| via `osdf-data.gdex.ucar.edu` | nginx alias | 301 → director | ❌ missing → browser blocks |
+| via `osdf-director.osg-htc.org` | Pelican director | 307 → cache | ✅ `*` |
+| data cache (NRP/OSG, XRootD) | e.g. `*.nationalresearchplatform.org:8443` | 200/206 | ✅ `*` |
+
+So GDEX **is** browser-readable today — if you go through the **Pelican director**
+(`https://osdf-director.osg-htc.org/ncar/gdex/...`) instead of the `osdf-data`
+nginx alias (whose bare 301 omits CORS). Confirmed in a real browser: simple GET,
+Range GET, and a full `zarrita` open + coordinate-array read all succeed with zero
+CORS failures. (The GDEX-side fix would be to add CORS headers to the nginx 301.)
+Note: area-chunked stores still make a full point time-series slow in-browser, so
+precompute remains the fast path; the director path enables live *previews*.
 
 ---
 
