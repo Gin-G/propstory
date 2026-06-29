@@ -67,8 +67,23 @@ So GDEX **is** browser-readable today — if you go through the **Pelican direct
 nginx alias (whose bare 301 omits CORS). Confirmed in a real browser: simple GET,
 Range GET, and a full `zarrita` open + coordinate-array read all succeed with zero
 CORS failures. (The GDEX-side fix would be to add CORS headers to the nginx 301.)
-Note: area-chunked stores still make a full point time-series slow in-browser, so
-precompute remains the fast path; the director path enables live *previews*.
+
+**But CORS was never the real wall — chunk geometry is.** The ERA5 sfc stores are
+shaped `[time=749472, lat=721, lon=1440]` with chunks `[27, 480, 241]` (float32 ≈
+**12 MB per chunk**). To read one point you must download a whole 12 MB chunk to
+extract 27 values at that cell. A single timestep read measured ~295 ms, but a
+point *time-series* needs `ceil(N/27)` chunks:
+
+| Window | hourly steps | chunks | ~transfer to extract one point |
+|--------|--------------|--------|-------------------------------|
+| 30 days | 720 | ~27 | ~320 MB |
+| 5 years | 43,800 | ~1,622 | ~19 GB |
+
+So live in-browser point histories are impractical regardless of CORS — this is
+exactly why the precompute layer exists. The real ask for "fast real-time ARCO"
+is a **point/time-optimized rechunking** of ERA5 (time-contiguous, small spatial
+chunks) published alongside the area-chunked store; with that + director CORS, a
+browser could read a point history in a handful of small fetches.
 
 ---
 
