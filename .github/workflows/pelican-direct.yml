@@ -1,0 +1,34 @@
+name: Pelican-direct browser CORS test
+
+# Tests whether a browser can read GDEX Zarr through the OSDF/Pelican director
+# directly (which returns CORS headers), bypassing GDEX's nginx alias (which
+# doesn't). If this passes, the live in-browser path is viable for any address.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "web/test/pelican-direct.mjs"
+      - ".github/workflows/pelican-direct.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: |
+          npm init -y
+          npm i playwright
+          npx playwright install --with-deps chromium
+      - run: node web/test/pelican-direct.mjs | tee pelican_direct.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pelican-direct
+          path: |
+            artifacts/**
+            pelican_direct.log
