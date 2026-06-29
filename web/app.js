@@ -3,14 +3,19 @@
 // Fast path (default): fetch a precomputed, point-optimized cell JSON
 //   (web/data/<lat>_<lon>.json, GDEX-sourced, built in CI) in ONE request and
 //   render instantly.
-// On-demand path: if no precompute exists for the cell, GDEX cannot be read
-//   from the browser (it serves no CORS headers — a cross-origin fetch fails
-//   with "Failed to fetch", confirmed via a CI browser probe). So instead we
-//   open a pre-filled GitHub issue carrying the geocoded coordinates; an
-//   `on: issues` workflow reads GDEX server-side, commits the cell JSON, and
-//   Pages redeploys. The cell is then on the fast path (~2-3 min later).
+// Live ARCO path: for any cell inside a precomputed bounding box we read a
+//   time-contiguous Zarr (web/arco/, GDEX-sourced then rechunked in CI) straight
+//   from the browser with zarrita — one small same-origin chunk per variable, so
+//   ANY in-region address renders live in a few hundred ms. This is the "real"
+//   fix: the area-chunked GDEX store is unreadable per-point in a browser, but a
+//   time-contiguous rechunk is exactly what makes live point queries fast.
+// On-demand path: for a cell outside any precompute/ARCO coverage, GDEX cannot be
+//   read from the browser (no CORS, and area-chunked anyway), so we open a
+//   pre-filled GitHub issue; an `on: issues` workflow builds the cell server-side
+//   and Pages redeploys (on the fast path ~2-3 min later).
 
 const REPO = "Gin-G/propstory";   // where cell-request issues are filed
+const ARCO = "./arco";            // time-contiguous rechunked ERA5 (live, in-browser)
 
 const $ = (id) => document.getElementById(id);
 const logEl = $("log");
@@ -150,6 +155,76 @@ function requestCellUrl(loc, key) {
     "&labels=cell-request";
 }
 
+// ---- live ARCO (time-contiguous Zarr) read, straight from the browser --------
+let arcoIdx = null;
+async function loadArcoIndex() {
+  try {
+    const r = await fetch(`${ARCO}/index.json`, { cache: "no-cache" });
+    if (r.ok) arcoIdx = await r.json();
+  } catch { /* ARCO optional */ }
+}
+function inArco(lat, lon) {
+  if (!arcoIdx) return false;
+  const b = arcoIdx.bbox, h = arcoIdx.grid_deg / 2;
+  return lat >= b.lat_min - h && lat <= b.lat_max + h &&
+         lon >= b.lon_min - h && lon <= b.lon_max + h;
+}
+function nearestArr(arr, x) {
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < arr.length; i++) { const d = Math.abs(arr[i] - x); if (d < bd) { bd = d; bi = i; } }
+  return bi;
+}
+const argEx = (a, cmp) => { let bi = 0; for (let i = 1; i < a.length; i++) if (cmp(a[i], a[bi])) bi = i; return bi; };
+const isoUTC = (d) => d.toISOString().slice(0, 10);
+
+async function arcoRender(loc) {
+  const zarr = await import("https://esm.sh/zarrita@0.4.0?bundle");
+  const base = new URL(`arco/${arcoIdx.store}`, document.baseURI).href;
+  const store = await zarr.withConsolidated(new zarr.FetchStore(base));
+  const root = zarr.root(store);
+  const ilat = nearestArr(arcoIdx.lat, loc.lat);
+  const ilon = nearestArr(arcoIdx.lon, loc.lon);
+  const nt = arcoIdx.n_time;
+  const read = async (v) => {
+    const a = await zarr.open(root.resolve(v), { kind: "array" });
+    const { data } = await zarr.get(a, [zarr.slice(0, nt), ilat, ilon]);
+    return Array.from(data, Number);
+  };
+  const [swe, tmin, tmax, wind] = await Promise.all(
+    ["swe_in", "t2f_min", "t2f_max", "wind_mph"].map(read));
+  const t0 = new Date(arcoIdx.time_start + "T00:00:00Z").getTime();
+  const dates = swe.map((_, i) => new Date(t0 + i * 864e5));
+
+  const iPeak = argEx(swe, (a, b) => a > b);
+  const iWind = argEx(wind, (a, b) => a > b);
+  const iCold = argEx(tmin, (a, b) => a < b);
+  const iWarm = argEx(tmax, (a, b) => a > b);
+  const meanWind = wind.reduce((a, b) => a + b, 0) / wind.length;
+  const gl = arcoIdx.lat[ilat], go = arcoIdx.lon[ilon];
+
+  $("s_snow").innerHTML = `${f1(swe[iPeak])}<small> peak SWE (in)</small>`;
+  $("s_ski").innerHTML = `${swe.filter((x) => x > 0.1).length}<small> days SWE&gt;0</small>`;
+  $("s_wind").innerHTML = `${f1(meanWind)}<small> mean wind (mph)</small>`;
+  $("s_cold").innerHTML = `${Math.round(tmin[iCold])}<small> coldest (°F)</small>`;
+  $("tbl").innerHTML = `<tbody>
+    <tr><td>Deepest SWE</td><td class="n">${f1(swe[iPeak])} in</td><td>${isoUTC(dates[iPeak])}</td></tr>
+    <tr><td>Windiest day</td><td class="n">${f1(wind[iWind])} mph</td><td>${isoUTC(dates[iWind])}</td></tr>
+    <tr><td>Coldest</td><td class="n">${f1(tmin[iCold])} °F</td><td>${isoUTC(dates[iCold])}</td></tr>
+    <tr><td>Warmest</td><td class="n">${f1(tmax[iWarm])} °F</td><td>${isoUTC(dates[iWarm])}</td></tr>
+    <tr><td class="muted">Source</td><td colspan="2" class="muted">GDEX ERA5 · live ARCO read · cell ${gl},${go}</td></tr>
+    </tbody>`;
+  $("tbl_year").innerHTML = "";          // ARCO path doesn't compute per-year stats
+  drawChart($("ch_snow"), dates, swe);
+
+  // monthly SWE climatology (water-year order Oct..Sep)
+  const msum = Array(12).fill(0), mcnt = Array(12).fill(0);
+  dates.forEach((d, i) => { const m = d.getUTCMonth(); msum[m] += swe[i]; mcnt[m]++; });
+  const clim = msum.map((s, m) => (mcnt[m] ? s / mcnt[m] : 0));
+  const order = [9, 10, 11, 0, 1, 2, 3, 4, 5, 6, 7, 8];
+  const labels = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"];
+  drawBars($("ch_month"), labels, order.map((m) => clim[m]), 0);
+}
+
 let chipLoc = null;        // set when a precomputed-location chip is clicked
 let pendingLive = null;    // {loc, years} awaiting explicit "Load live" click
 let timerId = null;
@@ -191,16 +266,23 @@ async function build() {
 
     const key = snapKey(loc.lat, loc.lon);
     log(`grid cell ${key}; checking precomputed cache …`);
+    if (!arcoIdx) await loadArcoIndex();
     const cached = await tryCache(key);
     if (cached) {
       log("loaded precomputed cell (fast path).");
       renderSummary(cached);
       log("DONE.");
+    } else if (inArco(loc.lat, loc.lon)) {
+      log("live ARCO read (time-contiguous Zarr, in-browser) …");
+      const t0 = performance.now();
+      await arcoRender(loc);
+      log(`live render in ${((performance.now() - t0) / 1000).toFixed(1)}s (GDEX ERA5, rechunked).`);
+      log("DONE.");
     } else {
       log(`no precomputed cell for ${key} yet.`);
       pendingLive = { loc, key };
       $("go_live").style.display = "block";
-      log("GDEX serves no browser CORS, so this cell is built server-side from GDEX.");
+      log("outside ARCO coverage — this cell is built server-side from GDEX.");
       log("click “Request this location” to open a GitHub issue that builds it");
       log("(~2-3 min), then reload PropStory and search again.");
     }
@@ -270,6 +352,7 @@ function drawChart(canvas, times, vals) {
 initMap();
 $("go").addEventListener("click", build);
 $("go_live").addEventListener("click", loadLive);
+loadArcoIndex();
 loadAvailable();
 window.__appReady = true;          // smoke test waits on this before clicking
 log("ready. enter an address and click Build.");

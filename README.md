@@ -85,6 +85,17 @@ is a **point/time-optimized rechunking** of ERA5 (time-contiguous, small spatial
 chunks) published alongside the area-chunked store; with that + director CORS, a
 browser could read a point history in a handful of small fetches.
 
+### We built that rechunk (live in-browser, for a region)
+`build_arco.py` (`arco-build.yml`) reads a GDEX bbox **once** (area-chunking makes
+a region ≈ one cell's cost — every cell shares the same spatial chunks; the whole
+Colorado box built in ~4 min), aggregates hourly→daily, and rewrites it
+**time-contiguous** (chunks `[all-time, 4, 4]`) as a consolidated Zarr v2 under
+`web/arco/` (Colorado 39–41°N/107–105°W, ~2.8 MB). The front end then reads **any**
+in-region cell's full daily history **live in the browser** with zarrita — one
+small same-origin chunk per variable, a few hundred ms. This is the working proof
+of the rechunking GDEX should publish: same data, point-optimized layout → fast
+live point queries. Outside the box, the issue-triggered precompute still applies.
+
 ---
 
 ## Layout

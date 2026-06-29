@@ -49,8 +49,24 @@ try {
   }, base);
 } catch (e) { dataCheck = { error: String(e) }; }
 
+// Exercise the live ARCO path: an in-bbox cell that is NOT precomputed
+// (39.5, -106.0) must render straight from the time-contiguous Zarr.
+let arco = {};
+try {
+  const u = (URL.endsWith("/") ? URL : URL + "/") + "?lat=39.5&lon=-106.0";
+  await page.goto(u, { waitUntil: "load", timeout: 60000 });
+  await page.waitForFunction(() => window.__appReady === true, { timeout: 30000 });
+  await page.click("#go");
+  await page.waitForFunction(
+    () => /DONE\./.test(document.getElementById("log")?.textContent || ""),
+    { timeout: 45000 }).catch(() => {});
+  arco = { snow: await grab("#s_snow"), wind: await grab("#s_wind"),
+           records: await grab("#tbl"), log: await grab("#log") };
+} catch (e) { arco = { error: String(e) }; }
+
 const report = {
   url: URL,
+  arco_live: arco,
   rendered_snow_before: before.snow,
   rendered_snow_after_chip: after.snow,
   avail_text: before.avail,
