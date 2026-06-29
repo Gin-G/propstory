@@ -1,0 +1,70 @@
+name: Build ARCO (time-optimized) ERA5 store
+
+# Reads a bbox of GDEX ERA5 once (area-chunked → cheap for a region), aggregates
+# hourly→daily, and rewrites it time-contiguous as a consolidated Zarr v2 under
+# web/arco/. The browser then reads any in-bbox cell's full history in a couple
+# of small same-origin fetches (fast live point queries). Pushing web/arco to
+# main triggers the Pages deploy.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lat_min: { description: "south", default: "39.0" }
+      lat_max: { description: "north", default: "41.0" }
+      lon_min: { description: "west",  default: "-107.0" }
+      lon_max: { description: "east",  default: "-105.0" }
+      start_wy: { description: "earliest water year", default: "2021" }
+      end_wy: { description: "latest water year", default: "2025" }
+  push:
+    branches: ["main"]
+    paths:
+      - "propstory/build_arco.py"
+      - ".github/workflows/arco-build.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: arco-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install deps
+        run: pip install numpy pandas xarray zarr "dask[array]" fsspec aiohttp pelicanfs
+
+      - name: Build ARCO store
+        env:
+          ARCO_LAT_MIN: ${{ inputs.lat_min || '39.0' }}
+          ARCO_LAT_MAX: ${{ inputs.lat_max || '41.0' }}
+          ARCO_LON_MIN: ${{ inputs.lon_min || '-107.0' }}
+          ARCO_LON_MAX: ${{ inputs.lon_max || '-105.0' }}
+          START_WY: ${{ inputs.start_wy || '2021' }}
+          END_WY: ${{ inputs.end_wy || '2025' }}
+          OUT_DIR: web/arco
+        run: python -m propstory.build_arco | tee arco_build.log
+
+      - name: Commit ARCO store to main
+        run: |
+          git config user.email "nickco7@gmail.com"
+          git config user.name "Claude"
+          git add web/arco
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "data: ARCO time-optimized ERA5 store (Colorado bbox, daily)"
+            git push origin main
+          fi
+
+      - name: Upload logs + store listing
+        if: always()
+        run: |
+          echo "=== web/arco listing ==="; find web/arco -maxdepth 3 | head -200 || true
+          du -sh web/arco 2>/dev/null || true
