@@ -2,6 +2,7 @@ name: Live Pages check
 
 # Loads the deployed Pages site in headless Chromium and reports console errors,
 # failed requests, and whether data renders. Diagnoses the live site.
+# (re-run: verify the live ARCO path once the deploy has settled)
 
 on:
   workflow_dispatch:
