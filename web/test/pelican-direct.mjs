@@ -45,7 +45,8 @@ out.zarrita = await page.evaluate(async (base) => {
   try {
     const zarr = await import("https://esm.sh/zarrita@0.4.0?bundle");
     const store = await zarr.withConsolidated(new zarr.FetchStore(base));
-    const latNode = await zarr.open(store.resolve("latitude"), { kind: "array" });
+    const root = zarr.root(store);
+    const latNode = await zarr.open(root.resolve("latitude"), { kind: "array" });
     const lat = await zarr.get(latNode);
     const n = lat.data.length;
     return { ok: true, lat_count: n, lat_first: Number(lat.data[0]), lat_last: Number(lat.data[n - 1]) };
